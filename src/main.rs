@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use hyper::{Body, Request, Response, Server, Uri, Error};
+use http::uri::{Scheme};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::Client;
 
@@ -7,9 +8,10 @@ use hyper::Client;
 async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Error> {
     let client = Client::new();
     let method = req_incoming.method().clone();
+    let http1_scheme = Scheme::try_from("http").unwrap();
     let uri = Uri::builder()
-        .scheme(req_incoming.uri().scheme().unwrap().clone())
-        .authority("google.com")
+        .scheme(req_incoming.uri().scheme().unwrap_or(&http1_scheme).clone())
+        .authority("localhost:8000")
         .path_and_query(req_incoming.uri().path_and_query().unwrap().clone())
         .build()
         .unwrap();
