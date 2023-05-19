@@ -3,7 +3,9 @@ use hyper::{Body, Request, Response, Server, Uri, Error};
 use http::uri::{Scheme};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::Client;
-
+use html5ever::{parse_document, serialize, Parser, ParseOpts};
+use markup5ever_rcdom::RcDom;
+use html5ever::tendril::TendrilSink;
 
 async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Error> {
     let client = Client::new();
@@ -16,13 +18,30 @@ async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Erro
         .build()
         .unwrap();
     // TODO: stream instead of await
-    let body = hyper::body::to_bytes(req_incoming.into_body()).await.unwrap();
     let req = Request::builder()
-        .uri(uri)
+        .uri(uri.clone())
         .method(method)
-        .body(Body::from(body))
+        .body(Body::from(hyper::body::to_bytes(req_incoming.into_body()).await.unwrap()))
         .unwrap();
-    return client.request(req).await;
+    let (parts, resp_body_stream) = client.request(req).await?.into_parts();
+    if !parts.status.is_success() {
+        println!("Skipping transform of non-successful status {:?}", parts.status);
+        return Ok(Response::from_parts(parts, resp_body_stream));
+    }
+    let content_type = parts.headers.get(http::header::CONTENT_TYPE);
+    if content_type.is_none() {
+        println!("Skipping transform of non-HTML content type {:?}", content_type);
+        return Ok(Response::from_parts(parts, resp_body_stream));
+    }
+
+    println!("Scanning {:?} for transformable HTML", uri);
+    let body_orig = hyper::body::to_bytes(resp_body_stream).await.unwrap();
+    let body_bytes: Vec<u8> = body_orig.to_vec();
+    let html = parse_document(RcDom::default(), ParseOpts::default())
+        .from_utf8()
+        .read_from(&mut body_bytes)
+        .unwrap();
+    return Ok(Response::from_parts(parts, Body::from(body_orig)));
 }
 
 #[tokio::main]

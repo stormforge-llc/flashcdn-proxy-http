@@ -7,6 +7,8 @@ edition = "2021"
 
 [dependencies]
 futures = "0.3.28"
+html5ever = "0.26.0"
 http = "0.2.9"
 hyper = { version = "0.14.26", features = ["full"] }
+markup5ever_rcdom = "0.2.0"
 tokio = { version = "1.28.1", features = ["full"] }
