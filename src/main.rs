@@ -1,14 +1,75 @@
-use std::net::SocketAddr;
+use std::{
+    rc::Rc,
+    net::SocketAddr,
+    vec::Vec,
+};
 use hyper::{Body, Request, Response, Server, Uri, Error, Client};
 use hyper::body::Buf;
 use hyper::service::{make_service_fn, service_fn};
 use http::uri::{Scheme};
 use html5ever::{parse_document, serialize, ParseOpts};
 use html5ever::serialize::SerializeOpts;
-use markup5ever_rcdom::{RcDom, SerializableHandle};
+use markup5ever_rcdom::{RcDom, SerializableHandle, Node, NodeData};
 use html5ever::tendril::TendrilSink;
 use bytes::{BytesMut, BufMut};
 use std::borrow::BorrowMut;
+
+struct NodeIterator {
+    root: Rc<Node>,
+    idx: usize,
+    children: Vec<NodeIterator>,
+    me: bool,
+}
+
+impl NodeIterator {
+    fn new(root: Rc<Node>) -> NodeIterator {
+        let r = Rc::clone(&root);
+        let ch = r.children.borrow();
+        let mut children = Vec::with_capacity(ch.len());
+        for n in ch.iter() {
+            children.push(NodeIterator::new(n.clone()));
+        }
+        return NodeIterator {
+            root: r.clone(),
+            idx: 0,
+            children: children,
+            me: false,
+        }
+    }
+}
+
+impl Iterator for NodeIterator {
+    type Item = Rc<Node>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.me {
+            self.me = true;
+            return Some(Rc::clone(&self.root));
+        }
+
+        // Level-order traversal
+        while self.idx < self.children.len() {
+            let ch = &mut self.children[self.idx];
+            let n = ch.next();
+            if let Some(c) = n {
+                return Some(c);
+            }
+            self.idx += 1;
+        }
+
+        return None;
+    }
+}
+
+fn flash_transform(doc: Rc<Node>) -> Rc<Node> {
+    let it = NodeIterator::new(Rc::clone(&doc));
+    for n in it {
+        if let NodeData::Element { name, attrs, template_contents, mathml_annotation_xml_integration_point } = &n.as_ref().data {
+            println!("visiting {}", name.local.to_string());
+        }
+    }
+    return doc;
+}
 
 async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Error> {
     let client = Client::new();
@@ -44,7 +105,8 @@ async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Erro
         .read_from(&mut body_orig.reader())
         .unwrap();
     let mut w = BytesMut::new().writer();
-    serialize(w.borrow_mut(), &SerializableHandle::from(html.document), SerializeOpts::default());
+    let document_transformed = flash_transform(html.document);
+    serialize(w.borrow_mut(), &SerializableHandle::from(document_transformed), SerializeOpts::default());
     let body_transformed = w.into_inner().freeze();
     parts.headers.remove(http::header::CONTENT_LENGTH);
     return Ok(Response::from_parts(parts, Body::from(body_transformed)));
