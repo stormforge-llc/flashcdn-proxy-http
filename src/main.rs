@@ -1,11 +1,14 @@
 use std::net::SocketAddr;
-use hyper::{Body, Request, Response, Server, Uri, Error};
-use http::uri::{Scheme};
+use hyper::{Body, Request, Response, Server, Uri, Error, Client};
+use hyper::body::Buf;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::Client;
-use html5ever::{parse_document, serialize, Parser, ParseOpts};
-use markup5ever_rcdom::RcDom;
+use http::uri::{Scheme};
+use html5ever::{parse_document, serialize, ParseOpts};
+use html5ever::serialize::SerializeOpts;
+use markup5ever_rcdom::{RcDom, SerializableHandle};
 use html5ever::tendril::TendrilSink;
+use bytes::{BytesMut, BufMut};
+use std::borrow::BorrowMut;
 
 async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Error> {
     let client = Client::new();
@@ -23,7 +26,7 @@ async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Erro
         .method(method)
         .body(Body::from(hyper::body::to_bytes(req_incoming.into_body()).await.unwrap()))
         .unwrap();
-    let (parts, resp_body_stream) = client.request(req).await?.into_parts();
+    let (mut parts, resp_body_stream) = client.request(req).await?.into_parts();
     if !parts.status.is_success() {
         println!("Skipping transform of non-successful status {:?}", parts.status);
         return Ok(Response::from_parts(parts, resp_body_stream));
@@ -35,13 +38,16 @@ async fn hello_world(req_incoming: Request<Body>) -> Result<Response<Body>, Erro
     }
 
     println!("Scanning {:?} for transformable HTML", uri);
-    let body_orig = hyper::body::to_bytes(resp_body_stream).await.unwrap();
-    let body_bytes: Vec<u8> = body_orig.to_vec();
+    let body_orig = hyper::body::aggregate(resp_body_stream).await.unwrap();
     let html = parse_document(RcDom::default(), ParseOpts::default())
         .from_utf8()
-        .read_from(&mut body_bytes)
+        .read_from(&mut body_orig.reader())
         .unwrap();
-    return Ok(Response::from_parts(parts, Body::from(body_orig)));
+    let mut w = BytesMut::new().writer();
+    serialize(w.borrow_mut(), &SerializableHandle::from(html.document), SerializeOpts::default());
+    let body_transformed = w.into_inner().freeze();
+    parts.headers.remove(http::header::CONTENT_LENGTH);
+    return Ok(Response::from_parts(parts, Body::from(body_transformed)));
 }
 
 #[tokio::main]
